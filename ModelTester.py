@@ -1,23 +1,14 @@
-# import imp
-# from msilib.schema import Class
-# from os import getcwd
-# from re import X
-# import librosa.display
-# import matplotlib.pyplot as plt
 import math
-from unicodedata import name
 import librosa
 import os
 import numpy as np
 import tensorflow as tf
 from pydub import AudioSegment
 import pandas as pd
-# from decimal import *
-# import cv2
 
-class AmplitudeTester:
+class ModelTester():
     
-    def __init__(self) -> None:
+    def __init__(self,model_path,outputName:str) -> None:
         self.__volumeIncrement = 0
         self.__isLoadFile = False
         self.__fileName:str = ""
@@ -25,8 +16,21 @@ class AmplitudeTester:
         self.__inputDatas = []
         self.__strLen = 0
         self.loudness = "Not load WAV file yet!"
+        self.max_dBFS = "Not load WAV file yet!"
+        self.__normalizedDb = None
         self.__result ={}
         self.__fileNameList = []
+        self.__outPutName = outputName
+        # Load model
+        self.__interpreter = tf.lite.Interpreter(model_path)
+        self.__interpreter.allocate_tensors()
+
+        # get input/output information
+        input_details = self.__interpreter.get_input_details()
+        self.__modelInputIndex = input_details[0]['index']
+        output_details = self.__interpreter.get_output_details()
+        self.__outPutTensorIndex = output_details[0]['index']
+
         self.__resultTable = [
             "Fire Alarm",
             "Clapping",
@@ -57,7 +61,7 @@ class AmplitudeTester:
         for i in range(24):
             self.__detail[i] = []
 
-    def volumeAdjustByAmp(self,db:int):
+    def volumeAdjustByAmp(self,db:int,callByNormalized:bool = False):
 
         if not self.__isLoadFile:
             print("Don't run volumeAdjust before loadFile!")
@@ -71,10 +75,26 @@ class AmplitudeTester:
                 self.__fileData[index] = -1.0
             else:
                 self.__fileData[index] = value*amp
-        self.__volumeIncrement = db
+        if not callByNormalized:
+            self.__volumeIncrement = db
 
+    def NormalizedMaxDBFS(self,targetDb:int):
+        if not self.__isLoadFile:
+            print("Don't run volumeNormalizedDb before loadFile!")
+            return
 
-    def loadWavFile(self,filePath:str,samplerate = 16000):  
+        if targetDb == self.max_dBFS:
+            return
+        
+        if targetDb>0:
+            print("targetDb must < 0 !")
+            return
+
+        self.volumeAdjustByAmp(targetDb - self.max_dBFS,callByNormalized=True)
+        self.max_dBFS = targetDb
+        self.__normalizedDb = targetDb
+
+    def loadWavFile(self,filePath:str,samplerate:int = 16000):  
         self.__fileName = filePath[filePath.rfind("\\")+1:]
 
         if self.__fileName == "" or self.__fileName[-4:] != '.wav':
@@ -93,7 +113,12 @@ class AmplitudeTester:
             return
         
         sound = AudioSegment.from_wav(filePath)
+        # print("file name = ",self.__fileName)
+        # print("max_dBFS = ",sound.max_dBFS)
         self.loudness = sound.dBFS
+        self.max_dBFS = sound.max_dBFS
+        # print("loudness = ",self.loudness)
+        # print()
         self.__isLoadFile = True
 
     def doLibrosa(self,stepLength = 3200,repeatTimes = 6):
@@ -121,15 +146,16 @@ class AmplitudeTester:
     def __putInModel(self):
         maxProbability= 0
         result = -1
-        interpreter = tf.lite.Interpreter(model_path="keras_model.tflite")
+        
         for indexOfInputDatas,input in enumerate(self.__inputDatas):
-            interpreter.allocate_tensors()
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            index = input_details[0]['index']
-            interpreter.set_tensor(index,input)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
+            
+            # input_details = self.__interpreter.get_input_details()
+            # output_details = self.__interpreter.get_output_details()
+            # index = input_details[0]['index']
+            self.__interpreter.set_tensor(self.__modelInputIndex,input)
+            self.__interpreter.invoke()
+            # output_data = self.__interpreter.get_tensor(output_details[0]['index'])
+            output_data = self.__interpreter.get_tensor(self.__outPutTensorIndex)
             for index,probability in enumerate(output_data[0]):
                 maxProbability = max(probability,maxProbability)
                 if maxProbability == probability:
@@ -138,16 +164,16 @@ class AmplitudeTester:
             #     print(index," : ",probability)
             # print("-"*5,"以上為第{}次辨識結果".format(indexOfInputDatas+1),"-"*5)
         
-        strPattern0 = f"檔名 : {self.__fileName}"
-        strPattern1 = f"聲音響度 : {round(self.loudness,4)}db"
+        strPattern0 = f"{self.__fileName}"
+        strPattern1 = f"{round(self.max_dBFS+self.__volumeIncrement,4)}db"
         if self.__volumeIncrement >= 0:
-            strPattern2 = f"聲音增幅 : +{round(self.__volumeIncrement,4)}db"
+            strPattern2 = f"+{round(self.__volumeIncrement,4)}db"
         else:
-            strPattern2 = f"聲音增幅 : {round(self.__volumeIncrement,4)}db"
-        strPattern3 = f"最終辨識結果 : {self.__resultTable[result]}({result})"
+            strPattern2 = f"{round(self.__volumeIncrement,4)}db"
+        strPattern3 = f"{self.__resultTable[result]}({result})"
         
-        strPattern4 = f"最大機率為 : {round(float(maxProbability),4)}"
-    
+        strPattern4 = f"{round(float(maxProbability),4)}"
+
         self.__result[self.__fileName] = [strPattern0,strPattern1,strPattern2,strPattern3,strPattern4]
         self.__strLen = max(self.__strLen,len(strPattern0),len(strPattern1),len(strPattern2),len(strPattern3))
         self.__fileNameList.append(self.__fileName[0:-4])
@@ -161,6 +187,28 @@ class AmplitudeTester:
             print()
 
     def exportResult(self):
+        frame = pd.DataFrame(self.__result)
+        # file = 'Result.xlsx'
+        file = self.__outPutName
+        frame.index = ['File Name','Max dBFS','Volume Increment','Result','Max Probability']
+        try:
+            if os.path.isfile(file):
+                with pd.ExcelWriter(file,mode="a") as writer:
+                    if self.__volumeIncrement >= 0:
+                        frame.to_excel(excel_writer=writer,sheet_name="+"+str(self.__volumeIncrement)+"db")
+                    else:
+                        frame.to_excel(excel_writer=writer,sheet_name=str(self.__volumeIncrement)+"db")
+            else:
+                with pd.ExcelWriter(file) as writer:
+                    if self.__volumeIncrement >= 0:
+                        frame.to_excel(excel_writer=writer,sheet_name="+"+str(self.__volumeIncrement)+"db")
+                    else:
+                        frame.to_excel(excel_writer=writer,sheet_name=str(self.__volumeIncrement)+"db")
+        except Exception as e:
+            print(f"error occur when save data to {file} file,error message : {e}")
+        
+
+    def exportDeatils(self):
         frame = pd.DataFrame(self.__detail).T
         columns = list(frame.columns)
         
@@ -175,15 +223,15 @@ class AmplitudeTester:
         
         nameIndex = 1
         
-        print(f'----{len(frame.columns)}')
+        # print(f'----{len(frame.columns)}')
         for i in range(len(frame.columns)+len(self.__fileNameList)-2):
             # print(frame.columns[i])
             if frame.columns[i] == 6:
                 # frame.insert(loc=i+1,column=self.__fileNameList[nameIndex],value=None)
                 frame.insert(loc=i+1,column=self.__fileNameList[nameIndex],value=None)
-                print(nameIndex)
+                # print(nameIndex)
                 nameIndex +=1
-        print(f'----{len(frame.columns)}')
+        # print(f'----{len(frame.columns)}')
         isNoneColumnAdd = False
         for i in range(len(frame.columns)+len(self.__fileNameList)-2):
             if isNoneColumnAdd:
@@ -192,40 +240,46 @@ class AmplitudeTester:
             if type(frame.columns[i+1]) != int:
                 frame.insert(loc=i+1,column=None,value=None,allow_duplicates=True)
                 isNoneColumnAdd = True
-
+        # file = 'Details_Of_Result.xlsx'
+        file = f'Details_Of_{self.__outPutName}'
         try:
-            with pd.ExcelWriter('Result.xlsx') as writer:
-                frame.to_excel(writer)
+            if os.path.isfile(file):
+                with pd.ExcelWriter(file,mode="a") as writer:
+                    if self.__volumeIncrement >= 0:
+                        frame.to_excel(excel_writer=writer,sheet_name="+"+str(self.__volumeIncrement)+"db")
+                    else:
+                        frame.to_excel(excel_writer=writer,sheet_name=str(self.__volumeIncrement)+"db")
+                    
+            else:
+                with pd.ExcelWriter(file) as writer:
+                    if self.__volumeIncrement >= 0:
+                        frame.to_excel(excel_writer=writer,sheet_name="+"+str(self.__volumeIncrement)+"db")
+                    else:
+                        frame.to_excel(excel_writer=writer,sheet_name=str(self.__volumeIncrement)+"db")
         except Exception as e:
-            print(f"error occur when save data to excel file,error message : {e}")
+            print(f"error occur when save data to Details_Of_Result.xlsx file,error message : {e}")
+        
 
     def __reset(self):
         self.__fileData = []
         self.__fileName = ""
         self.__inputDatas.clear()
-        # self.__detail.clear()
-        # self.__result.clear()
         self.__isLoadFile = False
-        self.__volumeIncrement = 0
         self.loudness = "Not load WAV file yet!"
+        self.max_dBFS = "Not load WAV file yet!"
+
+    def reset(self):
+        self.__volumeIncrement = 0
+        self.__strLen = 0
+        self.__normalizedDb = None
+        self.__result.clear()
+        self.__fileNameList.clear()
+        self.__detail = {}
+        for i in range(24):
+            self.__detail[i] = []
 
 
-# Entry Point
-amplitudeTester = AmplitudeTester()
-path = r"C:\Users\Aurismart_Ray\AppData\Local\librosa\librosa\Cache\\"
-roots = os.walk(path)
-# sampleBit = input("input the sample bit of these audio data:\n")
-# soundLevel = input("input the loudness level you want:\n")
 
-for parent, dirnames, filenames in roots:
-    for filename in filenames:
-        if(filename[-3:] == "wav"):
-            filePath = path + filename
-            amplitudeTester.loadWavFile(filePath)
-            if amplitudeTester.loudness != -20:
-                amplitudeTester.volumeAdjustByAmp(-15-amplitudeTester.loudness)
-            amplitudeTester.doLibrosa()
-amplitudeTester.exportResult()
-amplitudeTester.showResult()
+            
 
 
