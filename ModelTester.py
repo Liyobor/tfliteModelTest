@@ -5,12 +5,14 @@ import numpy as np
 import tensorflow as tf
 from pydub import AudioSegment
 import pandas as pd
+import struct
 
 class ModelTester():
     
     def __init__(self,model_path,outputName:str) -> None:
         self.__volumeIncrement = 0
         self.__isLoadFile = False
+        self.__isLoadBin = False
         self.__fileName:str = ""
         self.__fileData:list = []
         self.__inputDatas = []
@@ -30,6 +32,7 @@ class ModelTester():
         self.__modelInputIndex = input_details[0]['index']
         output_details = self.__interpreter.get_output_details()
         self.__outPutTensorIndex = output_details[0]['index']
+        self.model_inputDetails = self.__interpreter.get_input_details()
 
         self.__resultTable = [
             "Fire Alarm",
@@ -94,6 +97,26 @@ class ModelTester():
         self.max_dBFS = targetDb
         self.__normalizedDb = targetDb
 
+    def loadBinFile(self,filePath:str):
+        self.__fileName = filePath[filePath.rfind("\\")+1:]
+        if self.__fileName == "" or self.__fileName[-4:] != '.bin':
+            print("Path error!")
+            return
+        data = []
+        bin = open(filePath,'rb')
+        for i in range(int(os.path.getsize(filePath)/4)):
+            floatTuple = struct.unpack('f',bin.read(4))
+            # print("tuple = ",floatTuple[0])
+            # print("type = ",type(floatTuple[0]))
+            floatData = floatTuple[0]
+            data.append(np.float32(floatData))
+        data = np.array(data).reshape(1,128,63,1)
+        data = data.astype(np.float32)
+        self.__inputDatas.append(data)
+        self.loudness = None
+        self.max_dBFS = None
+        self.__isLoadBin = True
+
     def loadWavFile(self,filePath:str,samplerate:int = 16000):  
         self.__fileName = filePath[filePath.rfind("\\")+1:]
 
@@ -121,27 +144,58 @@ class ModelTester():
         # print()
         self.__isLoadFile = True
 
-    def doLibrosa(self,stepLength = 3200,repeatTimes = 6):
 
+    def showMelSpectrogramArray(self,stepLength = 1600,repeatTimes = 10):
         if not self.__isLoadFile:
             print("Don't doLibrosa before loadFile!")
             return 
-
         for i in range(repeatTimes):
-            input = []
             pos = i*stepLength
             data = self.__fileData[pos:pos+15999]
             melSpectrogram = librosa.feature.melspectrogram(y=data, sr=16000,n_fft=1024 ,n_mels=128,hop_length=256)
             xAxis = len(melSpectrogram)
             yAxis = len(melSpectrogram[0])
+            count = 0
+            print(f"filename:{self.__fileName[0:-4]}_{i}{self.__fileName[-4:]}"+"-"*10)
             for xIndex in range(xAxis):
                 for yIndex in range(yAxis):
-                    input.append(melSpectrogram[xIndex][yIndex])
-            input = np.array(input)
-            input = input.reshape(1,128,63,1)
-            input = input.astype(np.float32)
-            self.__inputDatas.append(input)
-        self.__putInModel()
+                    if count <= 20:
+                        print(f"({melSpectrogram[xIndex][yIndex]})")
+                        count +=1
+
+    def doLibrosa(self,stepLength = 3200,repeatTimes = 6):
+
+        if not self.__isLoadFile and not self.__isLoadBin:
+            print("Don't doLibrosa before loadFile!")
+            return 
+        if self.__isLoadFile:
+            for i in range(repeatTimes):
+                input = []
+                pos = i*stepLength
+                data = self.__fileData[pos:pos+15999]
+                melSpectrogram = librosa.feature.melspectrogram(y=data, sr=16000,n_fft=1024 ,n_mels=128,hop_length=256)
+                xAxis = len(melSpectrogram)
+                yAxis = len(melSpectrogram[0])
+                count = 0
+                for xIndex in range(xAxis):
+                    for yIndex in range(yAxis):
+                        if count <51:
+                            print(f"filename:{self.__fileName} , count {count}:{melSpectrogram[xIndex][yIndex]}")
+                            count +=1
+                        input.append(melSpectrogram[xIndex][yIndex])
+                print("----next round----")
+                input = np.array(input)
+                input = input.reshape(1,128,63,1)
+                input = input.astype(np.float32)
+                self.__inputDatas.append(input)
+            self.__putInModel()
+        elif self.__isLoadBin:
+            self.__putInModel()
+
+    
+
+    
+
 
     def __putInModel(self):
         maxProbability= 0
@@ -152,6 +206,7 @@ class ModelTester():
             # input_details = self.__interpreter.get_input_details()
             # output_details = self.__interpreter.get_output_details()
             # index = input_details[0]['index']
+            print('input = ',input.shape)
             self.__interpreter.set_tensor(self.__modelInputIndex,input)
             self.__interpreter.invoke()
             # output_data = self.__interpreter.get_tensor(output_details[0]['index'])
@@ -165,7 +220,10 @@ class ModelTester():
             # print("-"*5,"以上為第{}次辨識結果".format(indexOfInputDatas+1),"-"*5)
         
         strPattern0 = f"{self.__fileName}"
-        strPattern1 = f"{round(self.max_dBFS+self.__volumeIncrement,4)}db"
+        if(self.max_dBFS != None):
+            strPattern1 = f"{round(self.max_dBFS+self.__volumeIncrement,4)}db"
+        else:
+            strPattern1 = "NaN"
         if self.__volumeIncrement >= 0:
             strPattern2 = f"+{round(self.__volumeIncrement,4)}db"
         else:
