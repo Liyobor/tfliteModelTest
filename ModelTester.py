@@ -26,6 +26,7 @@ class ModelTester():
         # Load model
         self.__interpreter = tf.lite.Interpreter(model_path)
         self.__interpreter.allocate_tensors()
+        self.__repeatTimes = 6
 
         # get input/output information
         input_details = self.__interpreter.get_input_details()
@@ -34,34 +35,47 @@ class ModelTester():
         self.__outPutTensorIndex = output_details[0]['index']
         self.model_inputDetails = self.__interpreter.get_input_details()
 
+        
         self.__resultTable = [
-            "Fire Alarm",
-            "Clapping",
-            "Chatting",
-            "Fire Alarm Voice",
-            "Baby Cry",
-            "Cat",
-            "Snore",
-            "Rain",
-            "Door Knock",
-            "quiet",
-            "Ambulance",
-            "Fire Truck",
-            "Police Car",
-            "Car Horn",
-            "Polive Horn",
-            "Thunder",
-            "TrafficNoise",
-            "TrafficAccidence",
-            "TrashCar",
-            "TempleActivity",
-            "ContructionSite",
-            "Dog",
-            "LoudEngine",
-            "TrainWhistle",
+            "住警器A",                  #0
+            "拍手聲",                   #1
+            "說話聲",                   #2
+            "住警器Voice",              #3
+            "Baby Cry",                #4
+            "Cat",                     #5
+            "Snore",                   #6
+            "Rain",                    #7
+            "Door Knock",              #8
+            "quiet",                   #9
+            "救護車",                   #10
+            "消防車",                   #11
+            "警車",                    #12
+            "喇叭聲",                  #13
+            "警車-喇叭",                #14
+            "Thunder",                #15
+            "brakingSound",           #16
+            "MotorVehicleCrash",      #17
+            "TrashCar",               #18
+            "TempleActivity",         #19
+            "ConstructionSite",       #20
+            "Dog",                    #21
+            "LoudEngine",             #22
+            "TrainWhistle",           #23
+            "TurningWarning",         #24
+            "Whistle",                #25
+            "ElectricMotorEngine",    #26
+            "喇叭聲",                  #27
+            "喇叭聲",                  #28
+            "警車",                    #29
+            "警車",                    #30
+            "GlassBreaking",          #31
+            "GarbageTruckToAlice",    #32
+            "住警器B",                 #33
+            "住警器C",                 #34
+            "住警器D",                 #35
             ]
         self.__detail = {}
-        for i in range(24):
+        for i in range(len(self.__interpreter.get_tensor(self.__outPutTensorIndex)[0])):
             self.__detail[i] = []
 
     def volumeAdjustByAmp(self,db:int,callByNormalized:bool = False):
@@ -168,6 +182,7 @@ class ModelTester():
         if not self.__isLoadFile and not self.__isLoadBin:
             print("Don't doLibrosa before loadFile!")
             return 
+        self.__repeatTimes = repeatTimes
         if self.__isLoadFile:
             for i in range(repeatTimes):
                 input = []
@@ -180,10 +195,10 @@ class ModelTester():
                 for xIndex in range(xAxis):
                     for yIndex in range(yAxis):
                         if count <51:
-                            print(f"filename:{self.__fileName} , count {count}:{melSpectrogram[xIndex][yIndex]}")
+                            # print(f"filename:{self.__fileName} , count {count}:{melSpectrogram[xIndex][yIndex]}")
                             count +=1
                         input.append(melSpectrogram[xIndex][yIndex])
-                print("----next round----")
+                # print("----next round----")
                 input = np.array(input)
                 input = input.reshape(1,128,63,1)
                 input = input.astype(np.float32)
@@ -199,6 +214,7 @@ class ModelTester():
 
     def __putInModel(self):
         maxProbability= 0
+        probabilityList = [0.0]*len(self.__interpreter.get_tensor(self.__outPutTensorIndex)[0])
         result = -1
         
         for indexOfInputDatas,input in enumerate(self.__inputDatas):
@@ -206,18 +222,26 @@ class ModelTester():
             # input_details = self.__interpreter.get_input_details()
             # output_details = self.__interpreter.get_output_details()
             # index = input_details[0]['index']
-            print('input = ',input.shape)
+            # print('input = ',input.shape)
             self.__interpreter.set_tensor(self.__modelInputIndex,input)
             self.__interpreter.invoke()
             # output_data = self.__interpreter.get_tensor(output_details[0]['index'])
             output_data = self.__interpreter.get_tensor(self.__outPutTensorIndex)
+            # print("output_data[0] len = ",len(output_data[0]))
             for index,probability in enumerate(output_data[0]):
-                maxProbability = max(probability,maxProbability)
-                if maxProbability == probability:
-                    result = index
+                probabilityList[index] += probability
+                # print(f'index = {index}, prob = {probability}')
+
+                # maxProbability = max(probability,maxProbability)
+                # if maxProbability == probability:
+                #     result = index
                 self.__detail[index].append(probability)
+
             #     print(index," : ",probability)
             # print("-"*5,"以上為第{}次辨識結果".format(indexOfInputDatas+1),"-"*5)
+        # print(self.__fileName)
+        # print(probabilityList)
+        
         
         strPattern0 = f"{self.__fileName}"
         if(self.max_dBFS != None):
@@ -228,9 +252,12 @@ class ModelTester():
             strPattern2 = f"+{round(self.__volumeIncrement,4)}db"
         else:
             strPattern2 = f"{round(self.__volumeIncrement,4)}db"
-        strPattern3 = f"{self.__resultTable[result]}({result})"
+        strPattern3 = f"{self.__resultTable[probabilityList.index(max(probabilityList))]}({probabilityList.index(max(probabilityList))})"
+        # print(f'result  = {strPattern3}')
+       
         
-        strPattern4 = f"{round(float(maxProbability),4)}"
+        strPattern4 = f"{round(float(max(probabilityList)),4)}"
+        # print(f'max probability  = {strPattern4}')
 
         self.__result[self.__fileName] = [strPattern0,strPattern1,strPattern2,strPattern3,strPattern4]
         self.__strLen = max(self.__strLen,len(strPattern0),len(strPattern1),len(strPattern2),len(strPattern3))
@@ -273,18 +300,19 @@ class ModelTester():
         
         # print(self.__fileNameList)
         for index,value in enumerate(columns):
-            columns[index] = value%6+1
+            columns[index] = value%(self.__repeatTimes)+1
         frame.columns = columns
         
         # frame.insert(loc=0,column = self.__fileNameList[0],value=None)
+        print(self.__fileNameList)
         frame.insert(loc=0,column=self.__fileNameList[0],value=None)
         
         nameIndex = 1
         
         # print(f'----{len(frame.columns)}')
         for i in range(len(frame.columns)+len(self.__fileNameList)-2):
-            # print(frame.columns[i])
-            if frame.columns[i] == 6:
+        
+            if frame.columns[i] == (self.__repeatTimes):
                 # frame.insert(loc=i+1,column=self.__fileNameList[nameIndex],value=None)
                 frame.insert(loc=i+1,column=self.__fileNameList[nameIndex],value=None)
                 # print(nameIndex)
@@ -333,7 +361,7 @@ class ModelTester():
         self.__result.clear()
         self.__fileNameList.clear()
         self.__detail = {}
-        for i in range(24):
+        for i in range(len(self.__interpreter.get_tensor(self.__outPutTensorIndex)[0])):
             self.__detail[i] = []
 
 

@@ -19,19 +19,20 @@ fileExplorer = SimpleFileExplorer(path= path)
 roots = fileExplorer.getDirs()
 for root in roots:
     print('root = ',root)
-    amplitudeTester = ModelTester(model_path='keras_model.tflite',outputName=root[-3:]+'.xlsx')
+    amplitudeTester = ModelTester(model_path='220916model.tflite',outputName=root[-3:]+'.xlsx')
     for parent, dirnames, filenames in os.walk(root):
         for i in range(5):
             print(f"round {i+1} start,increase decibel is {i*3} db!")
             with alive_bar(len(filenames)) as bar:
                 for filename in filenames:
                     if filename[-3:] == "wav":
+                        print(filename)
                         filePath = root + '\\' + filename
                         amplitudeTester.loadWavFile(filePath)
                         # print(amplitudeTester.max_dBFS)
                         amplitudeTester.NormalizedMaxDBFS(-20)
                         amplitudeTester.volumeAdjustByAmp(i*3)
-                        amplitudeTester.doLibrosa()
+                        amplitudeTester.doLibrosa(repeatTimes=3)
                     bar()
                 amplitudeTester.exportDeatils()
                 # amplitudeTester.showResult()
