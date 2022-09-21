@@ -354,7 +354,7 @@ class ModelTester():
         self.loudness = "Not load WAV file yet!"
         self.max_dBFS = "Not load WAV file yet!"
 
-    def reset(self):
+    def clearResult(self):
         self.__volumeIncrement = 0
         self.__strLen = 0
         self.__normalizedDb = None

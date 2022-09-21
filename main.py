@@ -37,4 +37,4 @@ for root in roots:
                 amplitudeTester.exportDeatils()
                 # amplitudeTester.showResult()
                 amplitudeTester.exportResult()
-                amplitudeTester.reset()
+                amplitudeTester.clearResult()
